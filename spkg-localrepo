@@ -1,0 +1,297 @@
+#!/bin/sh
+VER=0.1
+
+# support the ROOT variable
+[ -z "$ROOT" ] && ROOT=''
+
+die() {
+  CODE=$1
+  shift
+  [ -n "$1" ] && echo -e "$@" >&2
+  exit $CODE
+}
+
+info() {
+  echo -e "Info: $@"
+}
+
+warning() {
+  echo -e "Warning: $@" >&2
+}
+
+error() {
+  echo -e "Error: $@" >&2
+}
+
+usage() {
+  cat <<EOF
+Wrapper for spkg to automatically install package in your local repository.
+
+  spkg-localrepo SPKG_OPTIONS -- OPTIONS
+
+OPTIONS:
+  -h, --help: show this screen without spkg help
+  -v, --version: show localrepo version.
+  -c CONFIG, --config=CONFIG: path of the config file.
+    Default to $CONF_DEF.
+  -d, --dry-run: Simulate all actions.
+    Nothing is really done, even package installation.
+  -i, --install: install spkg-localrepo as spkg wrapper.
+  -u, --uninstall: uninstall spkg-localrepo as spkg wrapper.
+
+EOF
+  [ -n "$1" ] && die $1
+}
+
+usage_all() {
+  usage
+  echo '----------'
+  "$SPKG_REAL_PATH" --help
+}
+
+version() {
+  echo "spkg-localrepo, Copyright Cyrille Pontvieux, GPLv3+"
+  echo "version $VER"
+  die 0
+}
+
+dry_run() {
+  if [ $DRY_RUN -eq 1 ]; then
+    echo "DRY-RUN: " "$@"
+  else
+    "$@"
+  fi
+}
+
+test_root_access() {
+  if [ $(id -u) -ne 0 ]; then
+    die 2 "You must run this script as root."
+  fi
+}
+
+install_wrapper() {
+  ME="$1"
+  [ $DRY_RUN -eq 0 ] && test_root_access
+  if [ -e "$SPKG_REAL_PATH" ]; then
+    error "Wrapper already installed."
+  else
+    if [ -e "$SPKG_PATH" ]; then
+      dry_run mv "$SPKG_PATH" "$SPKG_REAL_PATH"
+      dry_run cp "$ME" "$SPKG_PATH"
+      [ -x "$SPKG_PATH" ] || dry_run chmod +x "$SPKG_PATH"
+      info "Wrapper installed."
+    else
+      error "$SPKG_PATH not found, cannot install wrapper."
+      error "Did you install spkg?"
+    fi
+  fi
+}
+
+uninstall_wrapper() {
+  [ $DRY_RUN -eq 0 ] && test_root_access
+  if [ ! -e "$SPKG_REAL_PATH" ]; then
+    error "Wrapper already uninstalled."
+  else
+    if [ -e "$SPKG_PATH" ]; then
+      dry_run rm "$SPKG_PATH"
+      dry_run mv "$SPKG_REAL_PATH" "$SPKG_PATH"
+      [ -x "$SPKG_PATH" ] || dry_run chmod +x "$SPKG_PATH"
+      info "Wrapper uninstalled."
+    else
+      error "$SPKG_PATH not found, cannot uninstall wrapper."
+      error "Did you install the wrapper before? Did you have spkg installed?"
+    fi
+  fi
+}
+
+is_wrapper_installed() {
+  if [ -e "$SPKG_PATH" ]; then
+    if [ -e "$SPKG_REAL_PATH" ]; then
+      return 0
+    else
+      return 1
+    fi
+  else
+    return 2
+  fi
+}
+
+test_own_name() {
+  ME="$1"
+  NAME="$(basename "$ME")"
+  if [ "$NAME" != "spkg" ]; then
+    warning "Please take into account that this is a wrapper script for spkg.\nYou should probably install the wrapper using « $ME -- -i »"
+  fi
+}
+
+test_localrepo() {
+  if which "$LOCALREPO_PATH" >/dev/null 2>&1; then
+    [ -e "$REPO_ROOT"/ChangeLog.txt ] && return 0 || return 1
+  else
+    return 1
+  fi
+}
+
+check_safe_config() {
+  ME="$1"
+  test_own_name "$ME"
+  if ! is_wrapper_installed; then
+    error "Wrapper is not installed"
+  fi
+  if ! test_localrepo; then
+    error "localrepo is not installed or cannot be read"
+  fi
+}
+
+read_opt_value() {
+  PARAM="$1"
+  VALUE="$2"
+  if echo "$PARAM"|grep -q '^--.*='; then
+    VALUE="$(echo "$PARAM"|cut -d= -f2-)"
+  fi
+  echo $VALUE
+}
+
+is_package() {
+  PKG="$1"
+  if [ -e "$PKG" ] && [ -r "$PKG" ]; then
+    basename="$(basename "$PKG")"
+    if echo "$basename"|grep -q '^.*-[^-]\+-[^-]\+-[^-]\+\.t[glx]z$'; then
+      return 0
+    else
+      error "$PKG is not a slackware package"
+      return 1
+    fi
+  else
+    error "$PKG does not exist or is not readable"
+    return 1
+  fi
+}
+
+is_matched_package() {
+  PKG="$1"
+  basename="$(basename "$PKG")"
+  RET=1
+  for r in $MATCH_REGEX; do
+    if echo "$PKG"|grep -q "$r"; then
+      RET=0
+      break
+    elif echo "$basename"|grep -q "$r"; then
+      RET=0
+      break
+    fi
+  done
+  return $RET
+}
+
+REPO_ROOT="$ROOT"/var/localrepo
+SPKG_PATH="$ROOT"/sbin/spkg
+SPKG_REAL_PATH="$ROOT"/sbin/spkg.orig
+LOCALREPO_PATH=localrepo
+MATCH_REGEX='^[^/]*-[^-]\+-[^-]\+-[0-9]\+_SBo\.t[glx]z$'
+CONF_DEF="$ROOT"/etc/spkg-localrepo.conf
+CONF="$CONF_DEF"
+
+OWN_OPTIONS=0
+MUST_CALL_USAGE_ALL=0
+DRY_RUN=0
+SPKG_ARGS=''
+SPKG_DO_INSTALL=0
+PKGS=''
+INSTALL_WRAPPER=0
+UNINSTALL_WRAPPER=0
+while [ -n "$1" ]; do
+  case "$1" in
+    -h|--help)
+      shift
+      MUST_CALL_USAGE_ALL=1
+      ;;
+    --)
+      shift
+      OWN_OPTIONS=1
+      break
+      ;;
+    -i|--install|-u|--upgrade)
+      SPKG_ARGS="$SPKG_ARGS $1"
+      shift
+      SPKG_DO_INSTALL=1
+      ;;
+    -*)
+      SPKG_ARGS="$SPKG_ARGS $1"
+      shift
+      ;;
+    *)
+      PKG="$1"
+      shift
+      if [ $SPKG_DO_INSTALL -eq 1 ] && is_package "$PKG"; then
+        PKGS="$PKGS $PKG"
+      fi
+      SPKG_ARGS="$SPKG_ARGS $PKG"
+      ;;
+  esac
+done
+while [ -n "$1" ] && [ "$1" != "--" ]; do
+  case "$1" in
+    -h|--help)
+      shift
+      usage
+      die 0
+      ;;
+    -v|--version)
+      shift
+      version
+      ;;
+    -c|--config=)
+      CONF="$(read_opt_value "$1" "$2")"
+      echo "$1"|grep -q '^--' || shift
+      shift
+      ;;
+    -d|--dry-run)
+      shift
+      DRY_RUN=1
+      ;;
+    -i|--install)
+      shift
+      INSTALL_WRAPPER=1
+      ;;
+    -u|--uninstall)
+      shift
+      UNINSTALL_WRAPPER=1
+      ;;
+    *)
+      error "Unrecognized option $1"
+      shift
+      usage 1
+  esac
+done
+if [ -r "$CONF" ]; then
+  . "$CONF"
+  export REPO_ROOT
+  export SPKG_PATH
+  export SPKG_REAL_PATH
+  export LOCALREPO_PATH
+  export MATCH_REGEX
+fi
+if [ $UNINSTALL_WRAPPER -eq 1 ]; then
+  uninstall_wrapper
+fi
+if [ $INSTALL_WRAPPER -eq 1 ]; then
+  install_wrapper "$0"
+fi
+check_safe_config "$0"
+if [ $MUST_CALL_USAGE_ALL -eq 1 ]; then
+  usage_all
+else
+  [ $DRY_RUN -eq 0 ] && test_root_access
+  if [ -n "$SPKG_ARGS" ]; then
+    dry_run "$SPKG_REAL_PATH" $SPKG_ARGS
+  fi
+  if [ $SPKG_DO_INSTALL -eq 1 ] && [ -n "$PKGS" ]; then
+    for p in $PKGS; do
+      if is_matched_package "$p"; then
+        info "Adding/upgrading $p in local repository"
+        dry_run "$LOCALREPO_PATH" -a "$p"
+      fi
+    done
+  fi
+fi

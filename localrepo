@@ -1,0 +1,298 @@
+#!/bin/sh
+VER=0.3
+METAGEN_SIMPLE_URL=https://github.com/gapan/repo-scripts/raw/master/metagen-simple.sh
+
+CONF_FILE=/etc/localrepo.conf
+[ -r "$CONF_FILE" ] && . "$CONF_FILE"
+[ -n "$REPO_ROOT" ] || REPO_ROOT=/var/localrepo
+DEFAULT_ROOT_SET=salix
+[ -n "$DEFAULT_SET" ] || DEFAULT_SET=''
+[ -n "$SLAPTGETRC_PATH" ] || SLAPTGETRC_PATH=/etc/slapt-get/slapt-getrc
+
+die() {
+  CODE=$1
+  shift
+  [ -n "$1" ] && echo -e "$@" >&2
+  exit $CODE
+}
+
+usage() {
+  cat <<EOF
+Install and manage a local repository for Slackware/Salix
+
+  localrepo OPTIONS
+
+OPTIONS:
+  -h, --help: show this screen.
+  -v, --version: show localrepo version.
+  -r ROOT, --root=ROOT: path of the repository root directory.
+  -rs NAME, --rootset=NAME: rootset to install packages.
+  -t NAME, --set=NAME: path of the repository root directory.
+  -c, --create: create the local repository.
+  -del, --delete: delete the package from disk after adding it to the repo.
+  -ln, --symlink: create a symlink from the old location to the local repo.
+  -d PKG, --delete=PKG: delete PKG from the local repo.
+  -a PKG, --add=PKG: add or upgrade PKG in the local repo.
+  -f, --refresh: refresh the local repository.
+  -sp PATH, --slaptgetrc=PATH: path to the slapt-getrc file.
+  -s, --slaptget: add this repository to slapt-getrc.
+  -u, --update: update slapt-get cache.
+
+  You can specify multiple -a and -d options.
+  -d options are always performed before -a options
+
+ENVIRONMENT VARIABLES:
+  - REPO_ROOT: default to "$REPO_ROOT"
+  - ROOT_SET: default to root set of repo or "$DEFAULT_ROOT_SET"
+  - DEFAULT_SET: default to "$DEFAULT_SET"
+  - SLAPTGETRC_PATH: default to "$SLAPTGETRC_PATH"
+
+CONFIGURATION:
+  File: $CONF_FILE
+    Using sh syntax
+
+EOF
+  [ -n "$1" ] && die $1 || die 0
+}
+
+version() {
+  echo "localrepo, copyright Cyrille Pontvieux <jrd@salixos.org>, GPLv3+"
+  echo "version $VER"
+  die 0
+}
+
+test_write_access() {
+  if ! mkdir -p "$REPO_ROOT" >/dev/null 2>&1; then
+    die 1 "You don't have write access to $REPO_ROOT.\nYou should maybe consider running this script as root."
+  fi
+}
+test_repo_created() {
+  if [ ! -e "$REPO_ROOT"/.metagen.sh ]; then
+    die 2 "The repository "$REPO_ROOT" is not created."
+  fi
+}
+create_repo() {
+  mkdir -p "$REPO_ROOT"
+  (
+    cd "$REPO_ROOT"
+    touch ChangeLog.txt
+    [ -e .metagen.sh ] || (wget -O .metagen.sh "$METAGEN_SIMPLE_URL" && chmod +x .metagen.sh && sed -i "s:./salix:./$ROOT_SET:" .metagen.sh >> .metagen.sh)
+    [ -e PACKAGES.TXT ] || (echo "" > PACKAGES.TXT && gzip -c PACKAGES.TXT > PACKAGES.TXT.gz)
+    [ -e CHECKSUMS.md5 ] || (echo "" > CHECKSUMS.md5 && gzip -c CHECKSUMS.md5 > CHECKSUMS.md5.gz)
+    mkdir -p $ROOT_SET
+  )
+}
+read_opt_value() {
+  PARAM="$1"
+  VALUE="$2"
+  if echo "$PARAM"|grep -q '^--.*='; then
+    VALUE="$(echo "$PARAM"|cut -d= -f2-)"
+  fi
+  echo $VALUE
+}
+
+ACTION=0
+ACTION_CREATE=0
+ACTION_REFRESH=0
+NEW_ROOT_SET=''
+# 0: nothing, 1: delete, 2: symlink
+OPTION_DELETE=0
+PKGS_TO_DELETE=""
+PKGS_TO_ADD=""
+ACTION_SLAPTGET=0
+ACTION_UPDATE=0
+while [ -n "$1" ] && [ "$1" != "--" ]; do
+  case "$1" in
+    -h|--help)
+      shift
+      usage
+      ;;
+    -v|--version)
+      shift
+      version
+      ;;
+    -r|--root=)
+      REPO_ROOT="$(read_opt_value "$1" "$2")"
+      echo "$1"|grep -q '^--' || shift
+      shift
+      ;;
+    -rs|--rootset=)
+      NEW_ROOT_SET="$(read_opt_value "$1" "$2")"
+      echo "$1"|grep -q '^--' || shift
+      shift
+      ;;
+    -t|--set=)
+      DEFAULT_SET="$(read_opt_value "$1" "$2")"
+      echo "$1"|grep -q '^--' || shift
+      shift
+      ;;
+    -c|--create)
+      ACTION=1
+      ACTION_CREATE=1
+      shift
+      ;;
+    -del|--delete)
+      OPTION_DELETE=1
+      shift
+      ;;
+    -ln|--symlink)
+      OPTION_DELETE=2
+      shift
+      ;;
+    -d|--delete=)
+      ACTION=1
+      PKGS_TO_DELETE="$PKGS_TO_DELETE:$(read_opt_value "$1" "$2")"
+      echo "$1"|grep -q '^--' || shift
+      shift
+      ;;
+    -a|--add=)
+      ACTION=1
+      PKGS_TO_ADD="$PKGS_TO_ADD:$(read_opt_value "$1" "$2")"
+      echo "$1"|grep -q '^--' || shift
+      shift
+      ;;
+    -f|--refresh)
+      ACTION=1
+      ACTION_REFRESH=1
+      shift
+      ;;
+    -sp|--slaptgetrc=)
+      SLAPTGETRC_PATH="$(read_opt_value "$1" "$2")"
+      echo "$1"|grep -q '^--' || shift
+      shift
+      ;;
+    -s|--slaptget)
+      ACTION=1
+      ACTION_SLAPTGET=1
+      shift
+      ;;
+    -u|--update)
+      ACTION=1
+      ACTION_UPDATE=1
+      shift
+      ;;
+    *)
+      echo "Unrecognized option: $1" >&2
+      shift
+      usage 2
+  esac
+done
+[ $ACTION -eq 0 ] && usage 1
+# convert to full path
+REPO_ROOT="$(readlink -f "$REPO_ROOT")"
+SLAPTGETRC_PATH="$(readlink -f "$SLAPTGETRC_PATH")"
+test_write_access
+if [ $ACTION_CREATE -eq 1 ]; then
+  echo "Creating local repository in $REPO_ROOT..."
+  if [ -n "$NEW_ROOT_SET" ]; then
+    ROOT_SET="$NEW_ROOT_SET"
+  else
+    ROOT_SET="$DEFAULT_ROOT_SET"
+  fi
+  create_repo
+fi
+test_repo_created
+if [ "$ACTION_CREATE" -eq 0 ]; then
+  ACTUAL_ROOT_SET="$(cd "$REPO_ROOT"; find . -type d -mindepth 1 -maxdepth 1|sed 's:./::')"
+  if [ -n "$NEW_ROOT_SET" ]; then
+    ROOT_SET="$NEW_ROOT_SET"
+  elif [ -z "$ROOT_SET" ]; then
+    ROOT_SET="$ACTUAL_ROOT_SET"
+  fi
+  if [ "$ACTUAL_ROOT_SET" != "$ROOT_SET" ]; then
+    mv -v "$REPO_ROOT/$ACTUAL_ROOT_SET" "$REPO_ROOT/$ROOT_SET"
+    rm "$REPO_ROOT/.metagen.sh"
+    create_repo
+  fi
+fi
+if [ -n "$PKGS_TO_DELETE" ] || [ -n "$PKGS_TO_ADD" ]; then
+  LANG= date -u > "$REPO_ROOT/.ChangeLog.txt"
+fi
+if [ -n "$PKGS_TO_DELETE" ]; then
+  ACTION_REFRESH=1
+  IFS=':'
+  for name in $PKGS_TO_DELETE; do
+    [ -n "$name" ] || continue
+    if [ -z "$(find "$REPO_ROOT/$ROOT_SET" -type f -regex ".*/$name-[^-]+-[^-]+-[^-]+\.t[glx]z" >/dev/null 2>&1)" ]; then
+      die 2 "Package \"$name\" not found, cannot remove it."
+    fi
+    echo "Deleting package $name..."
+    (cd "$REPO_ROOT/$ROOT_SET"; echo -n "$(find . -type f -regex ".*/$name-[^-]+-[^-]+-[^-]+\.t[glx]z"|sed 's:./::')" >> "$REPO_ROOT"/.ChangeLog.txt)
+    echo ': Removed.' >> "$REPO_ROOT/.ChangeLog.txt"
+    find "$REPO_ROOT/$ROOT_SET" -type f -regex ".*/$name-[^-]+-[^-]+-[^-]+\.[^-]+" -exec rm -v '{}' \;
+  done
+  unset IFS
+fi
+if [ -n "$PKGS_TO_ADD" ]; then
+  IFS=':'
+  SET=''
+  if [ -n "$DEFAULT_SET" ]; then
+    SET="/$DEFAULT_SET"
+  fi
+  for p in $PKGS_TO_ADD; do
+    [ -n "$p" ] || continue
+    UPGRADED=0
+    if [ -e "$p" ]; then
+      base="$(echo "$p"|sed 's/\(.*\)\.t[glx]z/\1/')"
+      # delete old package with same name
+      name="$(basename "$base"|sed 's/^\(.*\)-[^-]\+-[^-]\+-[^-]\+$/\1/')"
+      if ls "$REPO_ROOT/$ROOT_SET/$name"-*-*-*.meta >/dev/null 2>&1; then
+        echo "Upgrading package $name..."
+        UPGRADED=1
+        ACTION_REFRESH=1
+        find "$REPO_ROOT/$ROOT_SET" -type f -regex ".*/$name-[^-]+-[^-]+-[^-]+\.[^-]+" -exec rm -v '{}' \;
+      else
+        echo "Adding package $name..."
+      fi
+      mkdir -p "$REPO_ROOT/$ROOT_SET$SET"
+      if [ $OPTION_DELETE -eq 0 ]; then
+        cp $base.* "$REPO_ROOT/$ROOT_SET$SET/"
+      else
+        mv $base.* "$REPO_ROOT/$ROOT_SET$SET/"
+        if [ $OPTION_DELETE -eq 2 ]; then
+          find "$REPO_ROOT/$ROOT_SET$SET/" -type f -regex ".*/$name-[^-]+-[^-]+-[^-]+\.[^-]+" -exec bash -c 'ln -s "$(readlink -f "$1")" "$2/"' -- '{}' "$(dirname "$p")" \;
+        fi
+      fi
+      echo -n "$(find "$REPO_ROOT/$ROOT_SET" -type f -regex ".*$SET/$name-[^-]+-[^-]+-[^-]+\.t[glx]z"|sed "s:.*\($SET/[^/]*\):\1:; s:^/::")" >> "$REPO_ROOT/.ChangeLog.txt"
+      if [ $UPGRADED -eq 1 ]; then
+        echo ': Upgraded.' >> "$REPO_ROOT/.ChangeLog.txt"
+      else
+        echo ': Added.' >> "$REPO_ROOT/.ChangeLog.txt"
+      fi
+    else
+      die 2 "Package \"$p\" not found, cannot add it."
+    fi
+  done
+  unset IFS
+  if [ $ACTION_REFRESH -eq 0 ]; then
+    echo "Searching for new packages in $REPO_ROOT..."
+    (
+      cd $REPO_ROOT
+      ./.metagen.sh new
+      ./.metagen.sh md5
+    )
+  fi
+fi
+if [ -n "$PKGS_TO_DELETE" ] || [ -n "$PKGS_TO_ADD" ]; then
+  echo '+-------------------------+' >> "$REPO_ROOT/.ChangeLog.txt"
+  [ -e "$REPO_ROOT/ChangeLog.txt" ] && cat "$REPO_ROOT/ChangeLog.txt" >> "$REPO_ROOT/.ChangeLog.txt"
+  mv "$REPO_ROOT/.ChangeLog.txt" "$REPO_ROOT/ChangeLog.txt"
+fi
+if [ $ACTION_REFRESH -eq 1 ]; then
+  echo "Refreshing $REPO_ROOT..."
+  (
+    cd $REPO_ROOT
+    ./.metagen.sh all
+    ./.metagen.sh md5
+  )
+fi
+if [ $ACTION_SLAPTGET -eq 1 ]; then
+  if ! egrep -q "$REPO_ROOT/:CUSTOM" $SLAPTGETRC_PATH; then
+    echo "Adding this local repository as a source in slapt-getrc..."
+    echo "SOURCE=file://$REPO_ROOT/:CUSTOM" >> $SLAPTGETRC_PATH
+  fi
+fi
+if [ $ACTION_UPDATE -eq 1 ]; then
+  echo "Updating slapt-get cache..."
+  /usr/sbin/slapt-get -u
+fi

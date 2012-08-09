@@ -1,0 +1,6 @@
+Install and manage a local repository for Slackware/Salix.
+
+- localrepo: script to add, remove, upgrade packages in a local repository.
+- spkg-localrepo: wrapper/replacement for spkg, to automatically add packages to the localrepo, using some matching criteria.
+
+See COPYING fot the licence.

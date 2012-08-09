@@ -1,0 +1,6 @@
+# vim: syn=sh:
+REPO_ROOT=/var/localrepo
+SPKG_PATH=/sbin/spkg
+SPKG_REAL_PATH=/sbin/spkg.orig
+LOCALREPO_PATH=/usr/local/bin/localrepo
+MATCH_REGEX='^[^/]*-[^-]\+-[^-]\+-[0-9]\+_SBo\.t[glx]z$'
