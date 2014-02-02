@@ -1,6 +1,6 @@
 #!/bin/sh
 VER=0.3
-METAGEN_SIMPLE_URL=https://github.com/gapan/repo-scripts/raw/master/metagen-simple.sh
+METAGEN_SIMPLE_URL=https://github.com/gapan/repo-scripts/raw/master/salix/metagen-simple.sh
 
 CONF_FILE=/etc/localrepo.conf
 [ -r "$CONF_FILE" ] && . "$CONF_FILE"
