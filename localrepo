@@ -76,7 +76,7 @@ create_repo() {
   (
     cd "$REPO_ROOT"
     touch ChangeLog.txt
-    [ -e .metagen.sh ] || (wget -O .metagen.sh "$METAGEN_SIMPLE_URL" && chmod +x .metagen.sh && sed -i "s:./salix:./$ROOT_SET:" .metagen.sh >> .metagen.sh)
+    [ -e .metagen.sh ] || (wget --no-check-certificate -O .metagen.sh "$METAGEN_SIMPLE_URL" && chmod +x .metagen.sh && sed -i "s:./salix:./$ROOT_SET:" .metagen.sh >> .metagen.sh)
     [ -e PACKAGES.TXT ] || (echo "" > PACKAGES.TXT && gzip -c PACKAGES.TXT > PACKAGES.TXT.gz)
     [ -e CHECKSUMS.md5 ] || (echo "" > CHECKSUMS.md5 && gzip -c CHECKSUMS.md5 > CHECKSUMS.md5.gz)
     mkdir -p $ROOT_SET
